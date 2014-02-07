@@ -8,6 +8,31 @@ import (
 	"encoding/csv"
 )
 
+var HANDSIZE_TO_PERMUTATION_MAP = make(map[int][][5]uint8, 3)
+
+var FIVE_CHOOSE_FIVE = [][5]uint8 {
+    {0, 1, 2, 3, 4},
+}
+
+var SIX_CHOOSE_FIVE = [][5]uint8 {
+    {0, 1, 2, 3, 4}, 
+	{0, 1, 2, 3, 5},
+	{0, 1, 2, 4, 5},
+	{0, 1, 3, 4, 5},
+	{0, 2, 3, 4, 5},
+	{1, 2, 3, 4, 5},
+}
+
+var SEVEN_CHOOSE_FIVE = [][5]uint8 {
+    {0, 1, 2, 3, 4}, {0, 1, 2, 3, 5}, {0, 1, 2, 3, 6},
+	{0, 1, 2, 4, 5}, {0, 1, 2, 4, 6}, {0, 1, 2, 5, 6}, 
+	{0, 1, 3, 4, 5}, {0, 1, 3, 4, 6}, {0, 1, 3, 5, 6},
+	{0, 1, 4, 5, 6}, {0, 2, 3, 4, 5}, {0, 2, 3, 4, 6},
+	{0, 2, 3, 5, 6}, {0, 2, 4, 5, 6}, {0, 3, 4, 5, 6},
+	{1, 2, 3, 4, 5}, {1, 2, 3, 4, 6}, {1, 2, 3, 5, 6},
+	{1, 2, 4, 5, 6}, {1, 3, 4, 5, 6}, {2, 3, 4, 5, 6},
+}
+
 // maps string value => prime number
 var STRING_INT_TO_PRIME = map[uint8]uint32 {
     65 : 41, // A 
@@ -56,8 +81,35 @@ var FLUSH_LOOKUP = make(map[uint32]uint32)
 var UNSUITED_LOOKUP = make(map[uint32]uint32)
 
 func init() {
+    
     FLUSH_LOOKUP = int_csv_to_map("flush_lookup.csv")
     UNSUITED_LOOKUP = int_csv_to_map("unsuited_lookup.csv")
+    
+    HANDSIZE_TO_PERMUTATION_MAP = map[int][][5]uint8 {
+        5 : FIVE_CHOOSE_FIVE,
+        6 : SIX_CHOOSE_FIVE,
+        7 : SEVEN_CHOOSE_FIVE,
+    }
+}
+
+func main() {
+	cards := make([]uint32, len(os.Args) - 1)
+	for i := 1; i < len(os.Args); i++ {
+	    cards[i-1] = make_card(os.Args[i])
+	}
+	
+	// get the permutations and the evaluation function
+	possible_hands := hand_permutations(cards, HANDSIZE_TO_PERMUTATION_MAP[len(cards)])
+	
+	best_score := uint32(7462)
+	for _, hand := range possible_hands {
+	    handscore := five(hand)
+	    if handscore < best_score {
+	        best_score = handscore
+	    }
+	}
+	
+	fmt.Print(best_score)
 }
 
 func int_csv_to_map(filepath string) map[uint32]uint32 {
@@ -106,37 +158,37 @@ func five(cards []uint32) uint32 {
     }
 }
 
-func printsymbols() {
-    fmt.Printf("A = %d\n", "A"[0])
-	fmt.Printf("K = %d\n", "K"[0])
-	fmt.Printf("Q = %d\n", "Q"[0])
-	fmt.Printf("J = %d\n", "J"[0])
-	fmt.Printf("T = %d\n", "T"[0])
-	fmt.Printf("9 = %d\n", "9"[0])
-	fmt.Printf("8 = %d\n", "8"[0])
-	fmt.Printf("7 = %d\n", "7"[0])
-    fmt.Printf("6 = %d\n", "6"[0])
-    fmt.Printf("5 = %d\n", "5"[0])
-    fmt.Printf("4 = %d\n", "4"[0])
-    fmt.Printf("3 = %d\n", "3"[0])
-    fmt.Printf("2 = %d\n\n", "2"[0])
-}
-
-func main() {
-	cards := make([]uint32, len(os.Args) - 1)
-	for i := 1; i < len(os.Args); i++ {
-	    cards[i-1] = make_card(os.Args[i])
-	}
-	handscore := five(cards)
-	fmt.Print(handscore)
-}
-
 func make_card(cardstring string) uint32 {
-    rank := STRING_INT_TO_RANK[cardstring[0]] << 8
+    /*
+    Cards are 32-bit integers, so there is no object instantiation - 
+    they are just ints. Most of the bits are used, and have a specific meaning. 
+    See below: 
+                                    Card:
+
+                          bitrank     suit rank   prime
+                    +--------+--------+--------+--------+
+                    |xxxbbbbb|bbbbbbbb|cdhsrrrr|xxpppppp|
+                    +--------+--------+--------+--------+
+
+        1) p = prime number of rank (deuce=2,trey=3,four=5,...,ace=41)
+        2) r = rank of card (deuce=0,trey=1,four=2,five=3,...,ace=12)
+        3) cdhs = suit of card (bit turned on based on suit of card)
+        4) b = bit turned on depending on rank of card
+        5) x = unused
+
+    This representation will allow us to do very important things like:
+    - Make a unique prime prodcut for each hand
+    - Detect flushes
+    - Detect straights
+
+    and is also quite performant.
+    */
+    
+    rank := STRING_INT_TO_RANK[cardstring[0]]
     rankprime := STRING_INT_TO_PRIME[cardstring[0]]
     bitrank := uint32(1) << rank << 16
     suit := STRING_INT_TO_SUIT[cardstring[1]] << 12
-    return bitrank | suit | rank | rankprime
+    return bitrank | suit | (rank << 8) | rankprime
 }
 
 func prime_product_from_hand(cards []uint32) uint32 {
@@ -145,6 +197,17 @@ func prime_product_from_hand(cards []uint32) uint32 {
         product *= (card & 0xFF)
     }
     return product
+}
+
+func hand_permutations(cards []uint32, permutation_indices [][5]uint8) [][]uint32 {
+    permutations := make([][]uint32, len(permutation_indices))
+    for i, card_indices := range permutation_indices {
+        permutations[i] = make([]uint32, 5)
+        for j, card_index := range card_indices {
+            permutations[i][j] = cards[card_index]
+        }
+    }
+    return permutations
 }
 
 func prime_product_from_rankbits(rankbits uint32) uint32 {
